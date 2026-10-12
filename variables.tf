@@ -22,6 +22,6 @@ variable "external_port" {
 
 variable "network_name" {
   description = "Nom du réseau Docker"
-  type        = string
+   type = string
   default     = "tp-iac-web-network"
 }
