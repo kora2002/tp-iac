@@ -1,0 +1,200 @@
+TP Infrastructure as Code - Réponses
+
+Karen MOUANOU BANZOUZI
+
+Section 9
+
+Question : quelle est la différence entre un montage bind et la copie
+d'un fichier dans une image Docker ?
+
+Réponse :
+Avec le bind, le conteneur utilise directement le dossier html/ de ma
+machine. Quand j'ai modifié index.html, j'ai vu le changement tout de
+suite en rafraîchissant la page, sans relancer Terraform ni Docker.
+
+Avec une copie (COPY dans un Dockerfile), les fichiers sont mis dans
+l'image au moment du build. Pour voir un changement, il faut refaire
+l'image. C'est ce que j'ai vu au TP CI/CD : quand je modifiais app.py,
+il fallait reconstruire l'image pour avoir le nouveau résultat.
+
+Le bind est pratique pour développer, la copie pour la production.
+
+section 10
+
+1. Pourquoi connecter le conteneur à ce réseau ?
+Le réseau permet d’isoler les conteneurs de ce projet des autres conteneurs de la machine, tout en leur permettant de communiquer entre eux.
+ Par exemple, si nous ajoutons une base de données plus tard, elle pourra communiquer avec Nginx sans être directement accessible depuis les autres projets, comme sportequip-advisor.
+
+2. Pourquoi déclarer le réseau dans Terraform ?
+Déclarer le réseau dans Terraform permet de gérer toute l’infrastructure à partir du code.
+ Le réseau est créé automatiquement avec la configuration prévue et supprimé lors de l’exécution de terraform destroy. Cela évite de devoir le créer manuellement avec docker network create et garantit une configuration reproductible.
+
+3. Vérifier que le réseau est supprimé lors de la destruction :
+Avant terraform destroy, docker network ls affichait tp-iac-nginx-network.
+Après le destroy, il n'apparaissait plus dans la liste. Le conteneur a
+été supprimé en premier, puis le réseau.
+
+section 11
+
+Question : quelle est la différence entre 127.0.0.1 et une écoute sur toutes les interfaces ?
+
+Réponse :
+127.0.0.1 (localhost) désigne ma propre machine. Avec ip = "127.0.0.1" dans le bloc ports, le site n'est accessible que depuis mon ordinateur.
+J'ai vérifié avec docker port tp-iac-nginx, qui affiche 80/tcp -> 127.0.0.1:8080, et curl http://127.0.0.1:8080 affiche bien ma page.
+
+Sans cette ligne, Docker écoute sur toutes les interfaces (0.0.0.0) : n'importe quel ordinateur du réseau pourrait accéder au site avec l'adresse IP de ma machine. C'est plus risqué si le service n'est pas prévu pour être public.
+
+
+Section 12
+
+Avec terraform plan -var-file="dev.tfvars", le plan affichait "2 to add, 2 to destroy" : Terraform remplaçait le conteneur et le réseau au lieu d'en créer de nouveaux à côté.
+ Le changement de nom et de port force le remplacement (forces replacement). Après l'apply, docker ps montre tp-iac-dev sur le port 8081. Un fichier .tfvars ne crée donc pas
+un état séparé : c'est la même infrastructure avec d'autres paramètres.
+
+Section 13
+
+1. Quelles ressources apparaissent dans terraform state list ?
+
+docker_container.web, docker_image.nginx et docker_network.app_network.
+Ce sont les 3 ressources déclarées dans main.tf.
+
+2. Quelles informations affiche terraform state show ?
+
+Tous les détails réels du conteneur : son id Docker, son nom (tp-iac-dev), son adresse IP (172.19.0.2), le port (8081), le montage du dossier html
+et le réseau. Il y a aussi des valeurs que je n'ai pas écrites dans le code, comme l'id ou la commande nginx.
+
+3. Pourquoi l'état Terraform doit-il être protégé ?
+
+C'est grâce à lui que Terraform sait quelles ressources il gère. S'il est perdu ou abîmé, Terraform ne fait plus le lien avec les vrais conteneurs et peut vouloir les recréer. En plus, il contient des informations précises sur l'infrastructure.
+
+4. Pourquoi éviter de le publier dans un dépôt public ?
+
+Il contient des informations sur l'infrastructure (adresses IP, id...) et dans un vrai projet il peut contenir des mots de passe ou des clés en clair. C'est pour ça que *.tfstate est dans le .gitignore.
+
+
+Section 14 - Dérive de configuration
+
+J'ai arrêté le conteneur à la main avec docker stop tp-iac-dev. Ensuite, terraform plan -var-file="dev.tfvars" affichait
+"1 to add, 0 to change, 0 to destroy" : Terraform a vu que le conteneur ne tournait plus alors que le code demande qu'il tourne (must_run = true). Il a donc prévu d'en créer un nouveau. Le réseau et l'image n'étaient
+pas concernés.
+
+Après terraform apply -var-file="dev.tfvars", le conteneur tourne de nouveau mais avec un nouvel id (2a7064b1363e au lieu de bbbbfae31557) :Terraform a recréé le conteneur au lieu de le redémarrer.
+
+Une dérive, c'est quand l'infrastructure réelle ne correspond plus au code, par exemple après une modification faite à la main. Terraform la détecte en comparant le code, l'état et la réalité.
+
+Section 15
+
+L'historique Git montre chaque modification du code : git log affiche la liste des commits et git diff montre les lignes ajoutées ou supprimées.
+
+Revue : on voit exactement ce qui a changé avant de l'appliquer, ce qui est important car une modification dans main.tf peut changer ou détruire
+une ressource.
+Collaboration : on sait qui a fait quelle modification et pourquoi, grâce aux messages de commit.
+Retour arrière : si une modification pose problème, on peut revenir à une ancienne version du code puis refaire terraform apply.
+
+Dans mon projet, j'ai deux commits : "Initialisation du projet IaC" et "Ajout du réseau Docker".
+
+
+Exercice 1 - Modifier le nom
+
+J'ai remplacé la valeur par défaut de container_name par tp-iac-web dans variables.tf. terraform fmt n'a rien modifié et terraform validate a affiché "Success! The configuration is valid."
+
+Le plan affiche "2 to add, 0 to change, 2 to destroy" :
+
+- le conteneur doit être remplacé car son nom change (tp-iac-nginx -> tp-iac-web, "forces replacement") ;
+- le réseau est aussi remplacé, car son nom utilise la variable container_name (tp-iac-web-network).
+L'image et le port 8080 ne changent pas. Changer une seule variable peut donc modifier plusieurs ressources.
+
+
+Exercice 2 - Modifier le port
+
+J'ai mis la valeur par défaut de external_port à 8082 dans variables.tf. Le plan affichait "external = 8080 -> 8082 forces replacement" : le conteneur doit être recréé car on ne peut pas changer le port d'un
+conteneur qui tourne. Le nom tp-iac-web de l'exercice 1 a été appliqué en même temps. Après terraform apply, docker ps montre tp-iac-web sur 127.0.0.1:8082 et curl http://localhost:8082 affiche bien ma page.
+
+
+Exercice 3 - Ajouter une variable
+
+J'ai ajouté une variable network_name dans variables.tf (valeur par défaut : tp-iac-web-network) et je l'ai utilisée dans main.tf pour le nom du réseau (name = var.network_name). Avant, le nom était construit à partir du nom du conteneur.
+
+Comme j'ai gardé le même nom, terraform plan affichait "No changes". J'ai ajouté l'output chosen_network_name dans outputs.tf. Après terraform apply, il affiche tp-iac-web-network, le même nom que l'output network_name. L'infrastructure n'a pas été modifiée
+(0 added, 0 changed, 0 destroyed).
+
+
+Exercice 4 - Comprendre l'état
+
+terraform state list affiche 3 ressources : docker_container.web, docker_image.nginx et docker_network.app_network.
+
+terraform graph montre que docker_container.web dépend de docker_image.nginx et de docker_network.app_network. L'image et le réseau ne dépendent de rien.
+
+Le conteneur dépend des deux car dans main.tf il utilise docker_image.nginx.image_id et docker_network.app_network.name. Il ne peut pas être créé tant que l'image et le réseau n'existent pas. Terraform déduit cet ordre tout seul à partir de ces références.
+
+Je l'ai vu pendant l'apply : l'image et le réseau ont été créés en même temps, puis le conteneur. Au destroy, le conteneur a été supprimé en premier.
+
+Exercice 5 - Détecter une dérive
+
+J'ai arrêté le conteneur avec docker stop tp-iac-web : son statut est passé à "Exited". terraform plan affichait "1 to add, 0 to change, 0 to destroy" :
+Terraform a vu que le conteneur ne tournait plus alors que le code demande qu'il tourne (must_run = true). Il a prévu d'en créer un nouveau. Le réseau et l'image n'étaient pas concernés.
+
+Après terraform apply, le conteneur tourne de nouveau avec un nouvel id(c86c2b89f9cf au lieu de ad0c16787c0a) et la page répond sur le port 8082. Terraform a donc remis l'infrastructure conforme au code.
+
+
+Exercice 6 - CI/CD
+
+J'ai créé le dépôt GitHub tp-iac et j'ai envoyé mon projet avec git push. Le workflow "Terraform Checks" s'est lancé automatiquement et il était vert : init, fmt -check et validate ont réussi.
+
+J'ai ensuite mal aligné une ligne dans variables.tf (type = string) et j'ai fait un push. Le workflow était rouge : l'étape Format Check a échoué et Validate n'a pas été lancée. Le code était valide, mais
+pas formaté selon le standard Terraform.
+
+J'ai corrigé avec terraform fmt -recursive, puis j'ai refait un push : le workflow est redevenu vert. La CI bloque donc le code mal formaté avant qu'il soit accepté.
+
+
+Exercice 7 - Nettoyage
+
+terraform plan -destroy affichait "3 to destroy" : le conteneur tp-iac-web, le réseau tp-iac-web-network et l'image. Après terraform destroy, docker ps -a ne montre plus le conteneur,
+docker network ls ne montre plus le réseau et terraform state list est vide. L'image nginx:alpine reste sur la machine grâce à keep_locally = true.
+
+Pourquoi ne pas supprimer l'état à la main ?
+Supprimer terraform.tfstate ne supprime pas le conteneur ni le réseau : ils continuent de tourner. Mais Terraform ne sait plus qu'ils existent.
+terraform destroy ne supprimerait rien, et terraform apply voudrait tout recréer, avec des conflits de nom et de port. Il faut donc toujours nettoyer avec terraform destroy.
+
+
+Section 20 - Questions de compréhension
+
+1. Différence entre terraform init, plan et apply :
+
+    -init prépare le projet et télécharge les providers.
+    -plan montre les changements prévus sans rien modifier.
+    -apply applique réellement les changements sur l'infrastructure.
+
+2. Rôle d'un provider Terraform ?
+
+    -Le provider fait le lien entre Terraform et un service (Docker, AWS...), il traduit le code Terraform en actions réelles sur ce service.
+
+3.À quoi sert le fichier terraform.tfstate ?
+
+    -Il garde en mémoire les ressources gérées par Terraform. Il permet de faire le lien entre le code et les ressources réelles.
+
+
+4. Pourquoi utilise-t-on des variables et des outputs ?
+    -Les variables permettent de changer des paramètres sans modifier le code des ressources. Les outputs affichent des informations utiles après le déploiement.
+
+5. Qu'est-ce qu'une dérive de configuration ?
+
+    -C'est une différence entre ce qui est décrit dans le code et l'état réel de l'infrastructure, souvent causée par une modification faite à la main.
+
+6. Différence entre Infrastructure as Code et configuration manuelle ?
+    -Avec l'IaC, l'infrastructure est décrite dans des fichiers : elle est reproductible et versionnée. La configuration manuelle se fait avec des commandes à la main, elle est plus difficile à refaire et à suivre.
+
+7. Intérêt de Git dans un projet IaC ?
+
+    -Git garde l'historique des modifications de l'infrastructure. On peut voir qui a changé quoi, travailler à plusieurs et revenir en arrière.
+
+8. Différence entre un contrôle CI et un déploiement CD ?
+    -La CI vérifie automatiquement le code (format, validation, tests). Le CD déploie automatiquement l'application ou l'infrastructure.
+
+9. Pourquoi examiner le plan avant d'appliquer une modification ?
+
+    -Pour vérifier ce qui va être créé, modifié ou supprimé, et éviter de détruire une ressource par erreur.
+
+10. Précautions avec les fichiers d'état et les secrets ?
+
+    -Ne jamais les publier sur Git (les mettre dans le .gitignore), les stocker dans un endroit protégé et ne pas les supprimer à la main.
