@@ -16,6 +16,8 @@ resource "docker_image" "nginx" {
   keep_locally = true
 }
 
+# Réseau Docker dédié au projet
+
 resource "docker_network" "app_network" {
   name = "${var.container_name}-network"
 }
